@@ -1,9 +1,20 @@
 # Question 5 - Falco: misbehaving pod - Solution
 
+# Step 0: find out under which systemd unit Falco runs.
+# Modern Falco packages ship one unit per driver, so plain "falco" often does not exist.
+systemctl list-units --all 'falco*'
+FALCO_UNIT=$(systemctl list-units --state=running 'falco*' --no-legend | awk '{print $1}' | head -1)
+echo "falco unit: $FALCO_UNIT"        # e.g. falco-modern-bpf.service
+
+# If nothing is running, start a driver unit by hand:
+#   sudo systemctl start falco-modern-bpf     # kernel >= 5.8 with BTF
+#   sudo systemctl start falco-bpf
+#   sudo systemctl start falco-kmod
+
 # Step 1: look at the Falco alerts and find the /dev/mem read
-sudo journalctl -fu falco
+sudo journalctl -fu "$FALCO_UNIT"
 # or, if you do not want to follow:
-sudo journalctl -u falco --no-pager | grep -i "/dev/mem" | tail -5
+sudo journalctl -u "$FALCO_UNIT" --no-pager | grep -i "/dev/mem" | tail -5
 
 # The alert line contains the container and pod name, for example:
 #   Critical Sensitive device read detected (... container_name=ollama

@@ -1,18 +1,68 @@
 #!/bin/bash
-set -e
+# Lab setup for Question 5 - Falco runtime detection
+set -uo pipefail
 
 echo "Preparing Question 5: Falco runtime detection"
+
+FALCO_UNIT=""
+
+unit_exists() { systemctl cat "$1" >/dev/null 2>&1; }
+
+find_active_falco_unit() {
+  for u in falco-modern-bpf falco-bpf falco-kmod falco; do
+    if systemctl is-active --quiet "$u" 2>/dev/null; then echo "$u"; return 0; fi
+  done
+  echo ""
+  return 1
+}
+
+install_falco() {
+  echo "Falco is not installed - installing it now (this takes a couple of minutes)..."
+  sudo apt-get update -q
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    --no-install-recommends ca-certificates curl gnupg dialog
+
+  curl -fsSL https://falco.org/repo/falcosecurity-packages.asc \
+    | sudo gpg --dearmor --yes -o /usr/share/keyrings/falco-archive-keyring.gpg
+  echo "deb [signed-by=/usr/share/keyrings/falco-archive-keyring.gpg] https://download.falco.org/packages/deb stable main" \
+    | sudo tee /etc/apt/sources.list.d/falcosecurity.list >/dev/null
+
+  sudo apt-get update -q
+  # FALCO_FRONTEND=noninteractive skips the interactive driver selection dialog
+  sudo DEBIAN_FRONTEND=noninteractive FALCO_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends falco
+
+  if command -v falco >/dev/null 2>&1; then
+    echo "  Falco installed: $(falco --version 2>/dev/null | head -1)"
+    return 0
+  fi
+  echo "  ERROR: the Falco package could not be installed." >&2
+  return 1
+}
+
+# Modern packages ship one unit per driver - try them until one actually runs.
+start_falco() {
+  for u in falco-modern-bpf falco-bpf falco-kmod falco; do
+    unit_exists "$u" || continue
+    echo "  trying driver unit: $u"
+    sudo systemctl enable --now "$u" >/dev/null 2>&1
+    sleep 6
+    if systemctl is-active --quiet "$u"; then
+      FALCO_UNIT="$u"
+      echo "  -> $u is running"
+      return 0
+    fi
+    sudo systemctl disable --now "$u" >/dev/null 2>&1
+  done
+  return 1
+}
 
 # ---------------------------------------------------------------
 # 1. Falco
 # ---------------------------------------------------------------
-if ! command -v falco >/dev/null 2>&1; then
-  echo "WARNING: falco was not found on this node."
-  echo "         Install it before working on this question, for example:"
-  echo "           curl -fsSL https://falco.org/repo/falcosecurity-packages.asc | sudo gpg --dearmor -o /usr/share/keyrings/falco-archive-keyring.gpg"
-  echo "           echo 'deb [signed-by=/usr/share/keyrings/falco-archive-keyring.gpg] https://download.falco.org/packages/deb stable main' | sudo tee /etc/apt/sources.list.d/falcosecurity.list"
-  echo "           sudo apt update && sudo apt install -y falco"
-else
+command -v falco >/dev/null 2>&1 || install_falco
+
+if command -v falco >/dev/null 2>&1; then
   echo "Installing the custom Falco rule that watches for physical memory reads..."
   sudo mkdir -p /etc/falco/rules.d
   sudo tee /etc/falco/rules.d/cks-dev-mem.yaml >/dev/null <<'EOF'
@@ -29,11 +79,23 @@ else
   tags: [filesystem, container, mitre_credential_access]
 EOF
 
-  echo "Restarting Falco..."
-  sudo systemctl restart falco 2>/dev/null \
-    || sudo systemctl restart falco-modern-bpf 2>/dev/null \
-    || sudo systemctl restart falco-bpf 2>/dev/null \
-    || echo "NOTE: could not restart a falco systemd unit - restart it manually."
+  FALCO_UNIT="$(find_active_falco_unit)"
+  if [[ -n "$FALCO_UNIT" ]]; then
+    echo "Restarting $FALCO_UNIT to load the new rule..."
+    sudo systemctl restart "$FALCO_UNIT"
+  else
+    echo "Starting Falco..."
+    start_falco
+  fi
+fi
+
+if [[ -z "$FALCO_UNIT" ]]; then
+  echo ""
+  echo "WARNING: Falco is not running on this node."
+  echo "         Check what exists and start one by hand:"
+  echo "           systemctl list-units --all 'falco*'"
+  echo "           sudo systemctl start falco-modern-bpf   # or falco-bpf / falco-kmod"
+  echo "         Then re-run this setup script."
 fi
 
 # ---------------------------------------------------------------
@@ -42,7 +104,6 @@ fi
 echo "Creating namespace ollama..."
 kubectl create namespace ollama --dry-run=client -o yaml | kubectl apply -f -
 
-# pick, at random, which of the three workloads misbehaves
 NAMES=(alpha beta gamma)
 CULPRIT="${NAMES[$((RANDOM % 3))]}"
 
@@ -118,10 +179,36 @@ EOF
 done
 
 echo "Waiting for the pods to start..."
-kubectl wait --for=condition=Available --timeout=120s deployment -n ollama --all || true
+kubectl wait --for=condition=Available --timeout=120s deployment -n ollama --all
+
+# ---------------------------------------------------------------
+# 3. Self test - is Falco actually alerting?
+# ---------------------------------------------------------------
+if [[ -n "$FALCO_UNIT" ]]; then
+  echo "Self test: waiting up to 60s for the first Falco alert..."
+  ALERTS=0
+  for i in $(seq 1 12); do
+    ALERTS=$(sudo journalctl -u "$FALCO_UNIT" --since "-5 min" --no-pager 2>/dev/null | grep -c "/dev/mem")
+    [[ "$ALERTS" -gt 0 ]] && break
+    sleep 5
+  done
+  if [[ "$ALERTS" -gt 0 ]]; then
+    echo "  OK - Falco is alerting ($ALERTS events). The alert content is hidden on purpose."
+  else
+    echo "  WARNING - no alert seen yet. Check with:"
+    echo "    sudo journalctl -u $FALCO_UNIT --no-pager -n 30"
+    echo "    sudo falco --list 2>/dev/null | grep -i 'physical memory'"
+  fi
+fi
 
 echo ""
 echo "[OK] Question 5 lab setup complete."
 echo "   - Namespace: ollama"
 echo "   - Deployments: ollama-alpha, ollama-beta, ollama-gamma"
-echo "   - One of them is reading /dev/mem. Let Falco tell you which one."
+if [[ -n "$FALCO_UNIT" ]]; then
+  echo "   - Falco systemd unit: $FALCO_UNIT"
+  echo "     Watch alerts with:  sudo journalctl -fu $FALCO_UNIT"
+else
+  echo "   - Falco is NOT running - see the warning above."
+fi
+echo "   - One workload is reading /dev/mem. Let Falco tell you which one."

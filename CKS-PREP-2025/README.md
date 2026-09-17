@@ -114,7 +114,8 @@ what they touch to `/opt/cks-backups/` and their `cleanup.bash` restores it.
 | Question | Needs |
 |---|---|
 | 1, 2, 3, 7 | a kubeadm control plane node (edits static pod manifests / kubelet config) |
-| 5 | Falco installed on the node |
+| 1 | kube-bench (downloaded and installed by `LabSetUp.bash` if missing) |
+| 5 | Falco (installed and started by `LabSetUp.bash` if missing; the unit is usually `falco-modern-bpf`) |
 | 9 | an ingress-nginx controller (installed by `LabSetUp.bash` if missing) |
 | 11 | a multi node cluster (control plane + at least one worker) |
 | 12 | `docker` or `ctr` to export image archives, plus `trivy` (or `bom`) |
