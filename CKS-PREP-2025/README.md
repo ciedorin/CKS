@@ -120,7 +120,7 @@ what they touch to `/opt/cks-backups/` and their `cleanup.bash` restores it.
 | 11 | a multi node cluster (control plane + at least one worker) |
 | 12 | `docker` or `ctr` to export image archives, plus `trivy` (or `bom`) |
 | 14 | Docker (installed by `LabSetUp.bash` if missing) |
-| 15 | internet access to download istioctl and install the Istio control plane |
+| 15 | internet access for istioctl and the Istio images, a schedulable (untainted) node, and roughly 1 GB free memory for istiod |
 
 Questions 8 and 9 both use the namespace `prod`. Run the cleanup of one before
 setting up the other.
