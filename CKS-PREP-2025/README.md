@@ -91,7 +91,7 @@ This opens VSCodium in the current directory, allowing you to browse and edit al
 | 2 | API Server hardening | Anonymous auth, Node,RBAC, NodeRestriction |
 | 3 | ImagePolicyWebhook | Admission control, fail closed on unsigned images |
 | 4 | Dockerfile & manifest hardening | Supply chain, least privilege, one-line fixes |
-| 5 | Falco, installed and started by `LabSetUp.bash` (the unit is usually `falco-modern-bpf`). The workloads are pinned to the node the setup runs on, because Falco only sees syscalls on its own host. |
+| 5 | Falco - runtime detection | Find the pod reading /dev/mem, scale it to zero |
 | 6 | Container immutability | runAsUser, read-only rootfs, no privilege escalation |
 | 7 | Audit logging | Audit policy + kube-apiserver audit flags |
 | 8 | NetworkPolicies | Deny all ingress, allow only from one namespace |
