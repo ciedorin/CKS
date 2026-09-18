@@ -5,6 +5,7 @@ set -uo pipefail
 echo "Preparing Question 5: Falco runtime detection"
 
 FALCO_UNIT=""
+FALCO_NODE=""
 
 unit_exists() { systemctl cat "$1" >/dev/null 2>&1; }
 
@@ -65,11 +66,15 @@ command -v falco >/dev/null 2>&1 || install_falco
 if command -v falco >/dev/null 2>&1; then
   echo "Installing the custom Falco rule that watches for physical memory reads..."
   sudo mkdir -p /etc/falco/rules.d
+  # The condition deliberately avoids the open_read macro: that macro requires
+  # fd.typechar='f', while /dev/mem is a character device, so the rule could
+  # silently never fire. evt.dir is not used either, to keep Falco from warning.
   sudo tee /etc/falco/rules.d/cks-dev-mem.yaml >/dev/null <<'EOF'
 - rule: Read physical memory device
   desc: A process inside a container read the sensitive device /dev/mem
   condition: >
-    open_read and container and fd.name = /dev/mem
+    evt.type in (open,openat,openat2) and evt.is_open_read=true
+    and container and fd.name=/dev/mem
   output: >
     Sensitive device read detected
     (user=%user.name process=%proc.name command=%proc.cmdline file=%fd.name
@@ -99,7 +104,29 @@ if [[ -z "$FALCO_UNIT" ]]; then
 fi
 
 # ---------------------------------------------------------------
-# 2. The ollama application
+# 2. Where to place the workloads
+# ---------------------------------------------------------------
+# Falco only sees syscalls on the kernel of the host it runs on. It was just
+# installed on THIS node, so the pods have to be scheduled here as well -
+# otherwise they land on a worker where nothing is watching and no alert is
+# ever produced.
+FALCO_NODE="$(hostname)"
+if ! kubectl get node "$FALCO_NODE" >/dev/null 2>&1; then
+  FALCO_NODE="$(kubectl get nodes -l node-role.kubernetes.io/control-plane \
+                -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+fi
+if [[ -z "$FALCO_NODE" ]]; then
+  FALCO_NODE="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+fi
+
+if [[ -z "$FALCO_NODE" ]]; then
+  echo "ERROR: could not determine which node to pin the workloads to." >&2
+  exit 1
+fi
+echo "Pinning the workloads to the node running Falco: $FALCO_NODE"
+
+# ---------------------------------------------------------------
+# 3. The ollama application
 # ---------------------------------------------------------------
 echo "Creating namespace ollama..."
 kubectl create namespace ollama --dry-run=client -o yaml | kubectl apply -f -
@@ -161,6 +188,15 @@ spec:
         app: ollama
         component: $n
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: $FALCO_NODE
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
       containers:
       - name: ollama
         image: busybox:1.36
@@ -181,10 +217,15 @@ done
 echo "Waiting for the pods to start..."
 kubectl wait --for=condition=Available --timeout=120s deployment -n ollama --all
 
+echo ""
+echo "Pod placement (all three must sit on $FALCO_NODE):"
+kubectl get pods -n ollama -o wide
+
 # ---------------------------------------------------------------
-# 3. Self test - is Falco actually alerting?
+# 4. Self test - is Falco actually alerting?
 # ---------------------------------------------------------------
 if [[ -n "$FALCO_UNIT" ]]; then
+  echo ""
   echo "Self test: waiting up to 60s for the first Falco alert..."
   ALERTS=0
   for i in $(seq 1 12); do
@@ -197,14 +238,15 @@ if [[ -n "$FALCO_UNIT" ]]; then
   else
     echo "  WARNING - no alert seen yet. Check with:"
     echo "    sudo journalctl -u $FALCO_UNIT --no-pager -n 30"
-    echo "    sudo falco --list 2>/dev/null | grep -i 'physical memory'"
+    echo "    sudo falco -L 2>/dev/null | grep -i 'physical memory'"
+    echo "    kubectl get pods -n ollama -o wide      # must be on $FALCO_NODE"
   fi
 fi
 
 echo ""
 echo "[OK] Question 5 lab setup complete."
 echo "   - Namespace: ollama"
-echo "   - Deployments: ollama-alpha, ollama-beta, ollama-gamma"
+echo "   - Deployments: ollama-alpha, ollama-beta, ollama-gamma (pinned to $FALCO_NODE)"
 if [[ -n "$FALCO_UNIT" ]]; then
   echo "   - Falco systemd unit: $FALCO_UNIT"
   echo "     Watch alerts with:  sudo journalctl -fu $FALCO_UNIT"

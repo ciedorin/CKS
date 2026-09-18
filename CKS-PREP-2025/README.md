@@ -91,7 +91,7 @@ This opens VSCodium in the current directory, allowing you to browse and edit al
 | 2 | API Server hardening | Anonymous auth, Node,RBAC, NodeRestriction |
 | 3 | ImagePolicyWebhook | Admission control, fail closed on unsigned images |
 | 4 | Dockerfile & manifest hardening | Supply chain, least privilege, one-line fixes |
-| 5 | Falco - runtime detection | Find the pod reading /dev/mem, scale it to zero |
+| 5 | Falco, installed and started by `LabSetUp.bash` (the unit is usually `falco-modern-bpf`). The workloads are pinned to the node the setup runs on, because Falco only sees syscalls on its own host. |
 | 6 | Container immutability | runAsUser, read-only rootfs, no privilege escalation |
 | 7 | Audit logging | Audit policy + kube-apiserver audit flags |
 | 8 | NetworkPolicies | Deny all ingress, allow only from one namespace |
@@ -115,7 +115,7 @@ what they touch to `/opt/cks-backups/` and their `cleanup.bash` restores it.
 |---|---|
 | 1, 2, 3, 7 | a kubeadm control plane node (edits static pod manifests / kubelet config) |
 | 1 | kube-bench (downloaded and installed by `LabSetUp.bash` if missing) |
-| 5 | Falco (installed and started by `LabSetUp.bash` if missing; the unit is usually `falco-modern-bpf`) |
+| 5 | Falco, installed and started by `LabSetUp.bash` (the unit is usually `falco-modern-bpf`). The workloads are pinned to the node the setup runs on, because Falco only sees syscalls on its own host. |
 | 9 | an ingress-nginx controller (installed by `LabSetUp.bash` if missing) |
 | 11 | a multi node cluster (control plane + at least one worker) |
 | 12 | `docker` or `ctr` to export image archives, plus `trivy` (or `bom`) |
